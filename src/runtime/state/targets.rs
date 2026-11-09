@@ -84,7 +84,9 @@ pub(super) struct CachedFenceOffsets {
     pub(super) direction: f64,
     pub(super) size: f64,
     pub(super) rotation_style: ScratchRotationStyle,
+    #[cfg(test)]
     pub(super) points: [(f64, f64); 4],
+    pub(super) bounds: [f64; 4],
 }
 
 #[derive(Debug, Clone)]
@@ -642,6 +644,18 @@ impl ScratchState {
         }
     }
 
+    #[inline(always)]
+    pub fn set_x(&mut self, x: f64) {
+        let y = self.instances[self.current_instance].y;
+        self.set_xy(x, y);
+    }
+
+    #[inline(always)]
+    pub fn set_y(&mut self, y: f64) {
+        let x = self.instances[self.current_instance].x;
+        self.set_xy(x, y);
+    }
+
     fn fenced_position(&mut self, instance_id: usize, x: f64, y: f64) -> (f64, f64) {
         let instance = &self.instances[instance_id];
         let target = instance.target;
@@ -660,14 +674,14 @@ impl ScratchState {
             geometry.rotation_center_y,
         ];
         let cache = self.instances[instance_id].fence_offsets;
-        let offsets = cache
+        let bounds = cache
             .filter(|cache| {
                 cache.geometry == geometry_key
                     && cache.direction == direction
                     && cache.size == size
                     && cache.rotation_style == rotation_style
             })
-            .map(|cache| cache.points)
+            .map(|cache| cache.bounds)
             .unwrap_or_else(|| {
                 // cache the transformed costume corners until its bounds or style changes.
                 let (rendered_direction, flip_x) =
@@ -685,27 +699,33 @@ impl ScratchState {
                 let points = costume_corners(geometry).map(|(local_x, local_y)| {
                     transform_costume_point((local_x, local_y), transform)
                 });
+                let mut bounds = [
+                    f64::INFINITY,
+                    f64::NEG_INFINITY,
+                    f64::INFINITY,
+                    f64::NEG_INFINITY,
+                ];
+                for (offset_x, offset_y) in points {
+                    bounds[0] = bounds[0].min(offset_x);
+                    bounds[1] = bounds[1].max(offset_x);
+                    bounds[2] = bounds[2].min(offset_y);
+                    bounds[3] = bounds[3].max(offset_y);
+                }
                 self.instances[instance_id].fence_offsets = Some(CachedFenceOffsets {
                     geometry: geometry_key,
                     direction,
                     size,
                     rotation_style,
+                    #[cfg(test)]
                     points,
+                    bounds,
                 });
-                points
+                bounds
             });
-        let mut min_x = f64::INFINITY;
-        let mut max_x = f64::NEG_INFINITY;
-        let mut min_y = f64::INFINITY;
-        let mut max_y = f64::NEG_INFINITY;
-        for (offset_x, offset_y) in offsets {
-            let tx = offset_x + instance_x;
-            let ty = offset_y + instance_y;
-            min_x = min_x.min(tx);
-            max_x = max_x.max(tx);
-            min_y = min_y.min(ty);
-            max_y = max_y.max(ty);
-        }
+        let min_x = bounds[0] + instance_x;
+        let max_x = bounds[1] + instance_x;
+        let min_y = bounds[2] + instance_y;
+        let max_y = bounds[3] + instance_y;
         let inset = (((max_x - min_x).min(max_y - min_y) / 2.0).floor()).max(0.0);
         let margin = 15.0_f64.min(inset);
         let fence_x = 240.0 - margin;

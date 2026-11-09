@@ -72,7 +72,9 @@ fn scratch_text_to_number(text: &str) -> f64 {
             })
             .unwrap_or(0.0);
     }
-    text.parse::<f64>().unwrap_or(0.0)
+    parse_small_ascii_integer(text)
+        .or_else(|| text.parse::<f64>().ok())
+        .unwrap_or(0.0)
 }
 
 /// Convert a Scratch value to a number using Scratch's arithmetic rules.
@@ -279,16 +281,42 @@ fn comparison_number(value: ScratchValueView<'_>) -> Option<f64> {
                 return None;
             }
 
-            text.parse::<f64>().ok().filter(|number| !number.is_nan())
+            parse_small_ascii_integer(text)
+                .or_else(|| text.parse::<f64>().ok())
+                .filter(|number| !number.is_nan())
         }
     }
+}
+
+#[inline]
+fn parse_small_ascii_integer(text: &str) -> Option<f64> {
+    let bytes = text.as_bytes();
+    let (negative, digits) = match bytes.first() {
+        Some(b'-') => (true, &bytes[1..]),
+        Some(b'+') => (false, &bytes[1..]),
+        _ => (false, bytes),
+    };
+    if digits.is_empty() || digits.len() > 15 {
+        return None;
+    }
+    let mut number = 0_u64;
+    for digit in digits {
+        if !digit.is_ascii_digit() {
+            return None;
+        }
+        number = number * 10 + u64::from(digit - b'0');
+    }
+    let number = number as f64;
+    Some(if negative { -number } else { number })
 }
 
 // compare numerically when both values can be read as numbers;
 // otherwise compare their lowercase text
 pub fn scratch_compare(left: impl ScratchInput, right: impl ScratchInput) -> Ordering {
-    let left = left.scratch_view();
-    let right = right.scratch_view();
+    scratch_compare_views(left.scratch_view(), right.scratch_view())
+}
+
+fn scratch_compare_views(left: ScratchValueView<'_>, right: ScratchValueView<'_>) -> Ordering {
 
     if let (Some(left_number), Some(right_number)) =
         (comparison_number(left), comparison_number(right))
@@ -306,7 +334,14 @@ pub fn scratch_compare(left: impl ScratchInput, right: impl ScratchInput) -> Ord
 }
 
 pub fn scratch_equals(left: impl ScratchInput, right: impl ScratchInput) -> bool {
-    scratch_compare(left, right) == Ordering::Equal
+    let left = left.scratch_view();
+    let right = right.scratch_view();
+    if let (ScratchValueView::Text(left), ScratchValueView::Text(right)) = (left, right)
+        && left == right
+    {
+        return true;
+    }
+    scratch_compare_views(left, right) == Ordering::Equal
 }
 
 pub fn scratch_greater_than(left: impl ScratchInput, right: impl ScratchInput) -> bool {

@@ -93,6 +93,12 @@ impl ScratchState {
             .unwrap_or(&self.lists[slot])
     }
 
+    /// Read a compiler-resolved Stage list without checking sprite-local storage.
+    #[inline(always)]
+    pub fn stage_list(&self, slot: usize) -> &ScratchList {
+        &self.lists[slot]
+    }
+
     pub fn list_mut(&mut self, slot: usize) -> &mut ScratchList {
         if self
             .list_metadata

@@ -2,13 +2,33 @@
 
 use super::operators::{scratch_string, scratch_to_number};
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, PartialEq)]
 pub enum ScratchValue {
     Number(f64),
     Text(String),
     Boolean(bool),
     /// undefined represents results from legacy Scratch VM reporter no-ops.
     Undefined,
+}
+
+impl Clone for ScratchValue {
+    fn clone(&self) -> Self {
+        match self {
+            Self::Number(value) => Self::Number(*value),
+            Self::Text(value) => Self::Text(value.clone()),
+            Self::Boolean(value) => Self::Boolean(*value),
+            Self::Undefined => Self::Undefined,
+        }
+    }
+
+    fn clone_from(&mut self, source: &Self) {
+        match (self, source) {
+            (Self::Number(destination), Self::Number(source)) => *destination = *source,
+            (Self::Text(destination), Self::Text(source)) => destination.clone_from(source),
+            (Self::Boolean(destination), Self::Boolean(source)) => *destination = *source,
+            (destination, source) => *destination = source.clone(),
+        }
+    }
 }
 
 impl ScratchValue {

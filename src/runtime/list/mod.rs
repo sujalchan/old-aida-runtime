@@ -51,11 +51,19 @@ impl ScratchList {
     }
 
     fn current_items(&self) -> &Arc<Vec<ScratchValue>> {
+        self.current_items_with_len().1
+    }
+
+    #[inline]
+    fn current_items_with_len(&self) -> (usize, &Arc<Vec<ScratchValue>>) {
         match &self.numeric_items {
-            Some(numbers) => self.materialized_items.get_or_init(|| {
-                Arc::new(numbers.iter().copied().map(ScratchValue::Number).collect())
-            }),
-            None => &self.items,
+            Some(numbers) => (
+                numbers.len(),
+                self.materialized_items.get_or_init(|| {
+                    Arc::new(numbers.iter().copied().map(ScratchValue::Number).collect())
+                }),
+            ),
+            None => (self.items.len(), &self.items),
         }
     }
 
@@ -295,27 +303,39 @@ impl ScratchList {
             return None;
         }
         let index = resolve_numeric_index(index, self.length())?;
-        match &self.current_items()[index] {
-            ScratchValue::Number(item) => Some(
-                item.partial_cmp(&value)
-                    .unwrap_or(std::cmp::Ordering::Equal)
-                    .is_eq(),
-            ),
-            _ => None,
-        }
+        let item = self
+            .numeric_items
+            .as_ref()
+            .and_then(|items| items.get(index).copied())
+            .or_else(|| match self.items.get(index) {
+                Some(ScratchValue::Number(item)) => Some(*item),
+                _ => None,
+            })?;
+        Some(
+            item.partial_cmp(&value)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .is_eq(),
+        )
     }
 
     #[inline]
     pub fn get(&self, index: impl ScratchInput) -> &ScratchValue {
         if let ScratchValueView::Number(number) = index.scratch_view() {
-            return resolve_numeric_index(number, self.length())
-                .and_then(|index| self.current_items().get(index))
-                .unwrap_or(&EMPTY_ITEM);
+            return self.get_numeric(number);
         }
         match resolve_index(index, self.length(), false) {
             ListIndex::Item(index) => &self.current_items()[index],
             ListIndex::All | ListIndex::Invalid => &EMPTY_ITEM,
         }
+    }
+
+    /// Read a list item from an already numeric Scratch index.
+    #[inline(always)]
+    pub fn get_numeric(&self, index: f64) -> &ScratchValue {
+        let (length, items) = self.current_items_with_len();
+        resolve_numeric_index(index, length)
+            .and_then(|index| items.get(index))
+            .unwrap_or(&EMPTY_ITEM)
     }
 
     /// Return the original item and a cached selector derived from it. The
@@ -561,16 +581,12 @@ fn resolve_index(index: impl ScratchInput, length: usize, accept_all: bool) -> L
     }
 }
 
-#[inline]
+#[inline(always)]
 fn resolve_numeric_index(index: f64, length: usize) -> Option<usize> {
-    if !index.is_finite() {
-        return None;
-    }
-    let index = index.floor();
-    if index < 1.0 || index > length as f64 {
-        return None;
-    }
-    Some(index as usize - 1)
+    // Rust's saturating float-to-usize cast truncates nonnegative values,
+    // which is Scratch's one-based floor behavior; NaN and negatives map to 0.
+    let index = (index as usize).checked_sub(1)?;
+    (index < length).then_some(index)
 }
 
 #[cfg(test)]
