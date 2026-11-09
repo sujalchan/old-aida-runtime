@@ -62,7 +62,7 @@ fn run_program(
         ticks += 1;
         if program.presentation_requested() {
             // headless presentation consumes the same tick snapshot without creating a window.
-            let _snapshot = program.observable_snapshot(ticks);
+            let _snapshot = program.renderer_snapshot(ticks);
             let _pen_commands = program.take_pending_pen_commands();
             program.presentation_consumed();
         }

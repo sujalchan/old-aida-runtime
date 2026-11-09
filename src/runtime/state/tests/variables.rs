@@ -130,6 +130,50 @@ fn shared_change_preserves_scratch_numeric_conversion() {
     assert!(matches!(state.get_shared(4), ScratchValue::Number(value) if value.is_sign_negative()));
 }
 
+#[test]
+fn numeric_getters_preserve_scratch_conversion_rules() {
+    let state = ScratchState::new(vec![
+        ScratchValue::Number(f64::NAN),
+        ScratchValue::Text(" 2.5 ".to_owned()),
+        ScratchValue::Boolean(true),
+        ScratchValue::Undefined,
+    ]);
+
+    assert_eq!(state.get_shared_number(0), 0.0);
+    assert_eq!(state.get_number(1), 2.5);
+    assert_eq!(state.get_number(2), 1.0);
+    assert_eq!(state.get_number(3), 0.0);
+}
+
+#[test]
+fn unobserved_numeric_write_falls_back_for_monitors_and_event_logging() {
+    let mut state = ScratchState::with_metadata(
+        vec![ScratchValue::Number(0.0), ScratchValue::Number(0.0)],
+        vec![
+            ScratchVariableMetadata::for_target("hidden", "hidden", "Stage", 0, true)
+                .with_monitor_visible(false),
+            ScratchVariableMetadata::for_target("visible", "visible", "Stage", 0, true)
+                .with_monitor_visible(true),
+        ],
+    );
+
+    state.set_shared_number_unobserved(0, 1.0);
+    assert_eq!(state.get_shared(0), &ScratchValue::Number(1.0));
+    assert!(!state.presentation_requested());
+
+    state.set_shared_number_unobserved(1, 2.0);
+    assert_eq!(state.get_shared(1), &ScratchValue::Number(2.0));
+    assert!(state.presentation_requested());
+
+    let (sender, receiver) = std::sync::mpsc::channel();
+    state.set_event_sink(Some(sender));
+    state.set_shared_number_unobserved(0, 3.0);
+    assert!(matches!(
+        receiver.try_recv(),
+        Ok(ObservableEvent::VariableChange { .. })
+    ));
+}
+
 // exercise the compiled numeric change path, including its first dynamic-value fallback.
 #[test]
 fn numeric_change_fast_paths_preserve_scope_and_monitor_updates() {

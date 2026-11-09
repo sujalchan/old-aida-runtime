@@ -28,6 +28,27 @@ fn repeat_zero_and_positive_counts_yield_once_per_body_iteration() {
 }
 
 #[test]
+fn batched_warp_safe_points_preserve_the_watchdog_check_iteration() {
+    let calls = std::rc::Rc::new(std::cell::Cell::new(0));
+    let clock = super::CountingClock(calls.clone());
+    let mut batched = WarpBudget::new(500);
+    let mut repeated = WarpBudget::new(500);
+
+    for _ in 0..3 {
+        let batch = batched.safe_points_until_check();
+        assert!(!batched.expired_after_safe_points(&clock, batch));
+        for _ in 0..batch {
+            assert!(!repeated.expired(&clock));
+        }
+        assert_eq!(
+            batched.safe_points_until_check(),
+            repeated.safe_points_until_check()
+        );
+    }
+    assert_eq!(calls.get(), 6);
+}
+
+#[test]
 fn repeat_keeps_its_entry_count_when_the_source_variable_changes() {
     let mut state = ScratchState::new(vec![
         ScratchValue::Text("3".to_owned()),

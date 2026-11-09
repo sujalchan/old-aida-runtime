@@ -4,7 +4,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use crate::runtime::ScratchValue;
+use crate::runtime::{NumericListSnapshot, ScratchValue};
 use ab_glyph::{FontArc, OutlineCurve};
 use lyon::math::Point;
 use wgpu::Queue;
@@ -56,6 +56,8 @@ pub(crate) struct VariableMonitor {
     pub(super) category: MonitorCategory,
     pub(super) kind: MonitorKind,
     list_items: Arc<Vec<ScratchValue>>,
+    list_numeric_items: Option<Arc<NumericListSnapshot>>,
+    list_item_count: usize,
     list_scroll_offset: usize,
     list_scroll_remainder: f32,
     visibility: MonitorVisibility,
@@ -142,6 +144,8 @@ impl VariableMonitor {
             category: MonitorCategory::Variables,
             kind: MonitorKind::ScalarVariable,
             list_items: Arc::new(Vec::new()),
+            list_numeric_items: None,
+            list_item_count: 0,
             list_scroll_offset: 0,
             list_scroll_remainder: 0.0,
             visibility: MonitorVisibility::Visible,
@@ -177,6 +181,7 @@ impl VariableMonitor {
     #[cfg(test)]
     pub(crate) fn with_list_items(mut self, items: Vec<String>, width: f32, height: f32) -> Self {
         self.list_items = Arc::new(items.into_iter().map(ScratchValue::Text).collect());
+        self.list_item_count = self.list_items.len();
         self.with_list_size(width, height)
     }
 
@@ -187,7 +192,20 @@ impl VariableMonitor {
         height: f32,
     ) -> Self {
         self.list_items = items;
+        self.list_item_count = self.list_items.len();
         self.with_list_size(width, height)
+    }
+
+    pub(super) fn list_item_text(&self, index: usize) -> Option<String> {
+        self.list_items
+            .get(index)
+            .map(crate::runtime::scratch_string)
+            .or_else(|| {
+                self.list_numeric_items
+                    .as_ref()
+                    .and_then(|numbers| numbers.get(index))
+                    .map(crate::runtime::scratch_string)
+            })
     }
 
     fn with_list_size(mut self, width: f32, height: f32) -> Self {
@@ -604,7 +622,7 @@ impl VariableLayer {
         let Some(monitor) = self.monitors.get(index) else {
             return 0;
         };
-        let mut len = monitor.list_items.len();
+        let mut len = monitor.list_item_count;
         if let Some(editor) = &self.list_editor
             && editor.monitor_index == index
             && editor.appended

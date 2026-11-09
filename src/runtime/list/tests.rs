@@ -1,6 +1,109 @@
 use super::{SCRATCH_LIST_LIMIT, ScratchList, ScratchValue, scratch_equals};
 
 #[test]
+fn finite_generated_numbers_match_generic_appends_and_keep_list_flags() {
+    let values = [11.0, 14.0, 20.0, 12.0];
+    let mut finite = ScratchList::new(Vec::new());
+    let mut generic = ScratchList::new(Vec::new());
+    let mut finite_index = 0;
+    let mut generic_index = 0;
+
+    assert!(finite.add_generated_finite_numbers(values.len(), || {
+        let value = values[finite_index];
+        finite_index += 1;
+        value
+    }));
+    assert!(generic.add_generated_numbers(values.len(), || {
+        let value = values[generic_index];
+        generic_index += 1;
+        value
+    }));
+    assert_eq!(finite.items(), generic.items());
+    assert!(finite.all_numbers && finite.all_finite_numbers);
+
+    let mut non_finite = ScratchList::new(vec![ScratchValue::Number(f64::INFINITY)]);
+    assert!(non_finite.add_generated_finite_numbers(1, || 11.0));
+    assert!(!non_finite.all_finite_numbers);
+    assert_eq!(non_finite.get(2.0), &ScratchValue::Number(11.0));
+
+    let mut generic_non_finite = ScratchList::new(Vec::new());
+    assert!(generic_non_finite.add_generated_numbers(2, || f64::INFINITY));
+    assert!(!generic_non_finite.all_finite_numbers);
+}
+
+#[test]
+fn generated_number_appender_keeps_old_renderer_snapshots_and_updates_new_ones() {
+    let mut list = ScratchList::new((0..1024).map(|n| ScratchValue::Number(n as f64)).collect());
+    list.with_numeric_replacements(|_| {});
+    let old_snapshot = list.shared_renderer_numeric_items().unwrap();
+    let mut next = 1024.0;
+
+    let changed = list.with_generated_finite_number_appender(3, |append| {
+        assert!(append.add_finite_numbers(1, || {
+            let value = next;
+            next += 1.0;
+            value
+        }));
+        append.add_finite_numbers(8, || {
+            let value = next;
+            next += 1.0;
+            value
+        })
+    });
+
+    assert!(changed);
+    assert_eq!(list.length(), 1027);
+    assert_eq!(list.get(1025.0), &ScratchValue::Number(1024.0));
+    assert_eq!(list.get(1027.0), &ScratchValue::Number(1026.0));
+    assert_eq!(old_snapshot.len(), 1024);
+    assert_eq!(old_snapshot.get(1023), Some(1023.0));
+
+    let new_snapshot = list.shared_renderer_numeric_items().unwrap();
+    assert_eq!(new_snapshot.len(), 1027);
+    assert_eq!(new_snapshot.get(1024), Some(1024.0));
+    assert_eq!(new_snapshot.get(1026), Some(1026.0));
+}
+
+#[test]
+fn generated_number_appender_preserves_mixed_lists_and_the_scratch_limit() {
+    let mut mixed = ScratchList::new(vec![ScratchValue::Text("head".into())]);
+    let mut generated = 0;
+    assert!(mixed.with_generated_finite_number_appender(3, |append| {
+        append.add_finite_numbers(2, || {
+            generated += 1;
+            generated as f64
+        })
+    }));
+    assert_eq!(generated, 2);
+    assert_eq!(mixed.items(), &["head".into(), 1.0.into(), 2.0.into()]);
+    assert!(!mixed.all_numbers);
+    assert!(!mixed.all_finite_numbers);
+
+    let mut full = ScratchList::new(vec![ScratchValue::Number(0.0); SCRATCH_LIST_LIMIT - 2]);
+    let mut appended = 0;
+    assert!(full.with_generated_finite_number_appender(5, |append| {
+        append.add_finite_numbers(5, || {
+            appended += 1;
+            appended as f64
+        })
+    }));
+    assert_eq!(appended, 2);
+    assert_eq!(full.length(), SCRATCH_LIST_LIMIT);
+
+    let mut already_full = ScratchList::new(vec![ScratchValue::Number(0.0); SCRATCH_LIST_LIMIT]);
+    let mut called = false;
+    assert!(
+        !already_full.with_generated_finite_number_appender(1, |append| {
+            append.add_finite_numbers(1, || {
+                called = true;
+                1.0
+            })
+        })
+    );
+    assert!(!called);
+}
+
+#[test]
 fn cached_selector_reads_preserve_values_and_invalidate_on_mutation() {
     let mut list = ScratchList::new(vec!["12".into(), "last".into(), "NaN".into(), 4.0.into()]);
     assert_eq!(list.get_cached_number(1.0), 12.0);
@@ -375,6 +478,98 @@ fn equality_search_is_case_insensitive_numeric_and_returns_first_match() {
     assert_eq!(list.item_number(1.0_f64), 2);
     assert_eq!(list.item_number("1"), 2);
     assert_eq!(list.item_number("missing"), 0);
+}
+
+#[test]
+fn numeric_item_number_search_does_not_materialize_compact_items() {
+    let mut list = ScratchList::new(vec![
+        ScratchValue::Number(3.0),
+        ScratchValue::Number(1.0),
+        ScratchValue::Number(3.0),
+    ]);
+    list.with_numeric_replacements(|items| {
+        assert_eq!(
+            items.replace_number_and_equals(2.0, 1.0, 1.0),
+            (false, true)
+        );
+    });
+
+    assert_eq!(list.item_number(3.0), 1);
+    assert_eq!(list.item_number(1.0), 2);
+    assert_eq!(list.item_number(2.0), 0);
+    assert!(!list.has_materialized_numeric_items());
+}
+
+#[test]
+fn compact_numeric_item_search_tracks_replacements_and_cloned_lists() {
+    let list = ScratchList::new(vec![ScratchValue::Number(0.0); 512]);
+    assert_eq!(list.item_number(0.0), 1);
+
+    let mut clone = list.clone();
+    assert!(clone.replace_number(1.0, 2.0));
+    assert_eq!(clone.item_number(0.0), 2);
+    assert_eq!(clone.item_number(2.0), 1);
+    assert_eq!(list.item_number(0.0), 1);
+
+    assert!(clone.replace_number(2.0, 3.0));
+    assert_eq!(clone.item_number(0.0), 3);
+    assert_eq!(clone.item_number(3.0), 2);
+
+    assert!(clone.replace_number(3.0, 4.0));
+    assert_eq!(clone.item_number(0.0), 4);
+    assert_eq!(clone.item_number(4.0), 3);
+}
+
+#[test]
+fn owned_numeric_reads_do_not_materialize_compact_storage() {
+    let mut list = ScratchList::new(vec![1.0.into(), 2.0.into(), 3.0.into()]);
+    assert!(list.replace_number(2.0, 7.0));
+
+    assert_eq!(list.get_value(2.0), ScratchValue::Number(7.0));
+    assert!(!list.has_materialized_numeric_items());
+}
+
+#[test]
+fn compact_finite_numeric_search_handles_vector_lanes_and_tail() {
+    let mut list = ScratchList::new((0..17).map(|i| (1000 + i) as f64).map(Into::into).collect());
+    assert!(list.replace_number(1.0, -1.0));
+
+    assert_eq!(list.item_number(-1.0), 1);
+    for index in [1_usize, 4, 8, 12, 16] {
+        assert_eq!(list.item_number((1000 + index) as f64), index + 1);
+    }
+    assert_eq!(list.item_number(9999.0), 0);
+}
+
+#[test]
+fn long_numeric_search_preserves_first_duplicate_after_replacement() {
+    let mut list = ScratchList::new(vec![ScratchValue::Number(11.0); 4096]);
+    assert!(list.replace_number(100.0, 3.0));
+    assert_eq!(list.item_number(3.0), 100);
+
+    assert!(list.replace_number(50.0, 3.0));
+    assert_eq!(list.item_number(3.0), 50);
+
+    assert!(list.replace_number(50.0, 11.0));
+    assert_eq!(list.item_number(3.0), 100);
+
+    let mut clone = list.clone();
+    assert!(clone.replace_number(100.0, 4.0));
+    assert_eq!(clone.item_number(3.0), 0);
+    assert_eq!(clone.item_number(4.0), 100);
+    assert_eq!(list.item_number(3.0), 100);
+}
+
+#[test]
+fn long_numeric_search_finds_late_values_after_replacement() {
+    let mut list = ScratchList::new(
+        (0..5000)
+            .map(|number| ScratchValue::Number(number as f64))
+            .collect(),
+    );
+    assert!(list.replace_number(5000.0, 9000.0));
+    assert_eq!(list.item_number(9000.0), 5000);
+    assert_eq!(list.item_number(4095.0), 4096);
 }
 
 #[test]

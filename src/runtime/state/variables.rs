@@ -44,6 +44,26 @@ impl ScratchState {
         &self.values[slot]
     }
 
+    /// Read a stage numeric slot without routing a number through the generic
+    /// `ScratchInput` conversion path.
+    #[inline(always)]
+    pub fn get_shared_number(&self, slot: usize) -> f64 {
+        match &self.values[slot] {
+            ScratchValue::Number(number) => scratch_number_operand(*number),
+            value => scratch_to_number(value),
+        }
+    }
+
+    /// Read the current target's numeric slot, retaining dynamic conversion for
+    /// values that were changed to text or booleans at runtime.
+    #[inline(always)]
+    pub fn get_number(&self, slot: usize) -> f64 {
+        match self.get(slot) {
+            ScratchValue::Number(number) => scratch_number_operand(*number),
+            value => scratch_to_number(value),
+        }
+    }
+
     #[inline]
     pub fn set(&mut self, slot: usize, value: ScratchValue) {
         let change = self.capture_variable_change(slot);
@@ -145,10 +165,18 @@ impl ScratchState {
     }
 
     /// store a compiler-proven numeric stage value without cloning monitor state.
-    #[inline]
+    #[inline(always)]
     pub fn set_shared_number(&mut self, slot: usize, value: f64) {
         if self.event_sink.is_some() {
             self.set_shared(slot, ScratchValue::Number(value));
+            return;
+        }
+        let notify = self
+            .variables
+            .get(slot)
+            .is_some_and(|metadata| metadata.monitor_visible);
+        if !notify && matches!(self.values.get(slot), Some(ScratchValue::Number(_))) {
+            self.values[slot] = ScratchValue::Number(value);
             return;
         }
         let Some(ScratchValue::Number(previous)) = self.values.get(slot) else {
@@ -156,13 +184,25 @@ impl ScratchState {
             return;
         };
         let changed = *previous != value;
-        let notify = self
-            .variables
-            .get(slot)
-            .is_some_and(|metadata| metadata.monitor_visible);
         self.values[slot] = ScratchValue::Number(value);
         if changed && notify {
             self.request_presentation();
+        }
+    }
+
+    /// Store a compiler-proven numeric stage value through the no-observer path.
+    /// Visible monitors and observable logging fall back to the regular setter.
+    #[inline(always)]
+    pub fn set_shared_number_unobserved(&mut self, slot: usize, value: f64) {
+        if self.event_sink.is_none()
+            && self
+                .variables
+                .get(slot)
+                .is_none_or(|metadata| !metadata.monitor_visible)
+        {
+            self.values[slot] = ScratchValue::Number(value);
+        } else {
+            self.set_shared_number(slot, value);
         }
     }
 

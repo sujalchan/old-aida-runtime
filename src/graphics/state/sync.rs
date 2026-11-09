@@ -172,7 +172,12 @@ impl GraphicsState {
         for list in &snapshot.lists {
             lists_changed |= self
                 .variable_layer
-                .set_monitor_list(&list.key, Arc::clone(&list.items))
+                .set_monitor_list_snapshot(
+                    &list.key,
+                    Arc::clone(&list.items),
+                    list.numeric_items.as_ref().map(Arc::clone),
+                    list.item_count,
+                )
                 .is_some_and(|(_, visible_changed)| visible_changed);
         }
         updates.extend(sprite_monitor_updates(

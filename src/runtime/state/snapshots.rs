@@ -40,6 +40,8 @@ pub struct ListSnapshot {
     pub target: String,
     pub instance_id: Option<usize>,
     pub items: Arc<Vec<ScratchValue>>,
+    pub numeric_items: Option<Arc<NumericListSnapshot>>,
+    pub item_count: usize,
     pub visible: bool,
 }
 
@@ -163,14 +165,37 @@ impl ScratchState {
         tick: usize,
         include_hidden_items: bool,
     ) -> RuntimeSnapshot {
+        self.snapshot_filtered(tick, include_hidden_items, false)
+    }
+
+    /// Build a renderer snapshot that shares compact numeric storage instead of
+    /// materializing every numeric entry as a dynamic Scratch value.
+    pub fn renderer_snapshot(&self, tick: usize) -> RuntimeSnapshot {
+        self.snapshot_filtered(tick, false, true)
+    }
+
+    fn snapshot_filtered(
+        &self,
+        tick: usize,
+        include_hidden_items: bool,
+        compact_numeric: bool,
+    ) -> RuntimeSnapshot {
         static EMPTY_ITEMS: std::sync::LazyLock<Arc<Vec<ScratchValue>>> =
             std::sync::LazyLock::new(|| Arc::new(Vec::new()));
         let list_items = |list: &ScratchList, visible: bool| {
-            if include_hidden_items || visible {
+            let item_count = list.length();
+            if compact_numeric
+                && visible
+                && let Some(numbers) = list.shared_renderer_numeric_items()
+            {
+                return (Arc::clone(&EMPTY_ITEMS), Some(numbers), item_count);
+            }
+            let items = if include_hidden_items || visible {
                 list.shared_items()
             } else {
                 Arc::clone(&EMPTY_ITEMS)
-            }
+            };
+            (items, None, item_count)
         };
         let mut snapshot = RuntimeSnapshot {
             tick,
@@ -258,13 +283,17 @@ impl ScratchState {
         }
         for (slot, metadata) in self.list_metadata.iter().enumerate() {
             if metadata.is_stage {
+                let (items, numeric_items, item_count) =
+                    list_items(&self.lists[slot], self.list_visibility[slot]);
                 snapshot.lists.push(ListSnapshot {
                     key: list_snapshot_key(&metadata.target, &metadata.name, &metadata.id, None),
                     id: metadata.id.clone(),
                     name: metadata.name.clone(),
                     target: metadata.target.clone(),
                     instance_id: None,
-                    items: list_items(&self.lists[slot], self.list_visibility[slot]),
+                    items,
+                    numeric_items,
+                    item_count,
                     visible: self.list_visibility[slot],
                 });
                 continue;
@@ -278,6 +307,8 @@ impl ScratchState {
                     .get(slot)
                     .and_then(Option::as_ref)
                     .unwrap_or(&self.lists[slot]);
+                let (items, numeric_items, item_count) =
+                    list_items(list, self.list_visibility[slot]);
                 snapshot.lists.push(ListSnapshot {
                     key: list_snapshot_key(
                         &metadata.target,
@@ -289,7 +320,9 @@ impl ScratchState {
                     name: metadata.name.clone(),
                     target: metadata.target.clone(),
                     instance_id: Some(instance_id),
-                    items: list_items(list, self.list_visibility[slot]),
+                    items,
+                    numeric_items,
+                    item_count,
                     visible: self.list_visibility[slot],
                 });
             }
@@ -308,6 +341,13 @@ impl ScratchState {
         include_hidden_items: bool,
     ) -> RuntimeSnapshot {
         let mut snapshot = self.observable_snapshot_filtered(tick, include_hidden_items);
+        snapshot.project_timer_millis = self.project_timer_millis(now_millis);
+        snapshot.project_timer_epoch = self.project_timer_epoch;
+        snapshot
+    }
+
+    pub fn renderer_snapshot_with_timer(&self, tick: usize, now_millis: u64) -> RuntimeSnapshot {
+        let mut snapshot = self.snapshot_filtered(tick, false, true);
         snapshot.project_timer_millis = self.project_timer_millis(now_millis);
         snapshot.project_timer_epoch = self.project_timer_epoch;
         snapshot

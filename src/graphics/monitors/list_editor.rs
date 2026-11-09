@@ -4,7 +4,10 @@ use crate::graphics::text::text_width;
 use crate::runtime::RuntimeInputEvent;
 use ab_glyph::{Font, ScaleFont};
 
-use super::{MonitorKind, MonitorVisibility, ScratchValue, VariableLayer, fit_monitor_text};
+use super::{
+    MonitorKind, MonitorVisibility, NumericListSnapshot, ScratchValue, VariableLayer,
+    fit_monitor_text,
+};
 
 pub(super) const LIST_ROW_HEIGHT: f32 = 24.0;
 pub(super) const LIST_FOOTER_HEIGHT: f32 = 22.0;
@@ -86,17 +89,38 @@ pub(super) struct ListScrollbarDrag {
 }
 
 impl VariableLayer {
+    #[cfg(test)]
     pub(crate) fn set_monitor_list(
         &mut self,
         key: &str,
         items: Arc<Vec<ScratchValue>>,
     ) -> Option<(usize, bool)> {
+        let item_count = items.len();
+        self.set_monitor_list_snapshot(key, items, None, item_count)
+    }
+
+    pub(crate) fn set_monitor_list_snapshot(
+        &mut self,
+        key: &str,
+        items: Arc<Vec<ScratchValue>>,
+        numeric_items: Option<Arc<NumericListSnapshot>>,
+        item_count: usize,
+    ) -> Option<(usize, bool)> {
         let index = self
             .monitors
             .iter()
             .position(|monitor| monitor.value_key == key)?;
-        if self.monitors[index].kind != MonitorKind::List
-            || Arc::ptr_eq(&self.monitors[index].list_items, &items)
+        if self.monitors[index].kind != MonitorKind::List {
+            return Some((index, false));
+        }
+        let same_numeric_items = match (&self.monitors[index].list_numeric_items, &numeric_items) {
+            (Some(current), Some(next)) => Arc::ptr_eq(current, next),
+            (None, None) => true,
+            _ => false,
+        };
+        if self.monitors[index].list_item_count == item_count
+            && Arc::ptr_eq(&self.monitors[index].list_items, &items)
+            && same_numeric_items
         {
             return Some((index, false));
         }
@@ -106,6 +130,8 @@ impl VariableLayer {
             .list_scroll_offset
             .min(self.monitors[index].max_list_scroll_offset(old_display_len));
         self.monitors[index].list_items = items;
+        self.monitors[index].list_numeric_items = numeric_items;
+        self.monitors[index].list_item_count = item_count;
         let displayed_len = self.list_display_len(index);
         self.monitors[index].list_scroll_offset = self.monitors[index]
             .list_scroll_offset
@@ -423,9 +449,7 @@ impl VariableLayer {
 
                 self.commit_list_editor(&mut events);
                 let text = self.monitors[index]
-                    .list_items
-                    .get(row_index - 1)
-                    .map(crate::runtime::scratch_string)
+                    .list_item_text(row_index - 1)
                     .unwrap_or_default();
                 self.list_editor = Some(ListItemEditor {
                     monitor_index: index,

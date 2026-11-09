@@ -10,15 +10,19 @@ mod state;
 mod tick;
 mod value;
 
-pub use list::{SCRATCH_LIST_LIMIT, ScratchList};
+pub use list::{
+    GeneratedNumericListAppender, NumericListSnapshot, SCRATCH_LIST_LIMIT, ScratchList,
+};
 pub use motion::GlideState;
 pub use operators::{
     fast_acos_degrees, fast_asin_degrees, fast_atan_degrees, fast_cos, fast_sin, fast_tan,
-    scratch_acos_degrees, scratch_add, scratch_and, scratch_asin_degrees, scratch_atan_degrees,
-    scratch_bool, scratch_compare, scratch_contains, scratch_cos, scratch_divide, scratch_equals,
+    scratch_acos_degrees, scratch_add, scratch_and, scratch_asin_degrees,
+    scratch_asin_degrees_number, scratch_atan_degrees, scratch_bool, scratch_compare,
+    scratch_contains, scratch_cos, scratch_cos_number, scratch_divide, scratch_equals,
     scratch_greater_than, scratch_join, scratch_length, scratch_less_than, scratch_letter,
     scratch_mod, scratch_multiply, scratch_not, scratch_number_operand, scratch_or, scratch_round,
-    scratch_sin, scratch_string, scratch_subtract, scratch_tan, scratch_to_number,
+    scratch_sin, scratch_sin_number, scratch_string, scratch_subtract, scratch_tan,
+    scratch_to_number,
 };
 pub use pacing::{PacingMechanism, PacingMode, SystemPacingMechanism, TickPacer};
 pub use pen::PenColorState;

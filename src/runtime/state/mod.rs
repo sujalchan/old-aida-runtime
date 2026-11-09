@@ -2,10 +2,10 @@
 
 use super::operators::to_text;
 use super::{
-    CachedListIndex, PenColorParameter, PenColorState, PenCommand, PenDot, PenStroke,
-    RealtimeAudio, ScratchInput, ScratchList, ScratchValue, ScratchValueView, SoundLibrary,
-    SoundParameters, SoundRuntime, scratch_number_operand, scratch_random, scratch_round,
-    scratch_string, scratch_to_number,
+    CachedListIndex, NumericListSnapshot, PenColorParameter, PenColorState, PenCommand, PenDot,
+    PenStroke, RealtimeAudio, ScratchInput, ScratchList, ScratchValue, ScratchValueView,
+    SoundLibrary, SoundParameters, SoundRuntime, scratch_number_operand, scratch_random,
+    scratch_round, scratch_string, scratch_to_number,
 };
 use std::collections::HashSet;
 use std::fmt::Debug;

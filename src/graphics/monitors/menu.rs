@@ -87,11 +87,13 @@ impl VariableLayer {
             }),
             MonitorContextAction::ExportList => {
                 let mut contents = String::new();
-                for (index, value) in monitor.list_items.iter().enumerate() {
+                for index in 0..monitor.list_item_count {
                     if index > 0 {
                         contents.push_str("\r\n");
                     }
-                    contents.push_str(&crate::runtime::scratch_string(value.clone()));
+                    if let Some(value) = monitor.list_item_text(index) {
+                        contents.push_str(&value);
+                    }
                 }
                 Some(super::ListMonitorFileAction::Export {
                     file_name: format!("{}.txt", monitor.name),

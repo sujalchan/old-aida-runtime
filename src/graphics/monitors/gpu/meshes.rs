@@ -690,12 +690,7 @@ impl VariableLayer {
                         editor.monitor_index == index && editor.index == list_index + 1
                     })
                     .map(|editor| editor.text.clone())
-                    .or_else(|| {
-                        monitor
-                            .list_items
-                            .get(list_index)
-                            .map(crate::runtime::scratch_string)
-                    })
+                    .or_else(|| monitor.list_item_text(list_index))
                     .unwrap_or_default();
                 (list_index + 1, value)
             })

@@ -157,6 +157,41 @@ fn renderer_snapshot_skips_hidden_compact_items_until_visible() {
 }
 
 #[test]
+fn renderer_snapshot_shares_compact_numbers_without_materializing_values() {
+    let mut state = ScratchState::with_project_data(
+        vec![],
+        vec![],
+        vec![ScratchList::new(
+            (1..=1024).map(|index| (index as f64).into()).collect(),
+        )],
+        vec![ScratchListMetadata::for_target(
+            "id", "items", "Stage", 0, true,
+        )],
+        vec![true],
+    );
+    assert!(state.list_mut(0).replace_number(2.0, 7.0));
+
+    let old_snapshot = state.renderer_snapshot(1);
+    assert!(old_snapshot.lists[0].items.is_empty());
+    assert_eq!(old_snapshot.lists[0].item_count, 1024);
+    let old_numbers = old_snapshot.lists[0].numeric_items.as_ref().unwrap();
+    assert_eq!(old_numbers.len(), 1024);
+    assert_eq!(old_numbers.get(0), Some(1.0));
+    assert_eq!(old_numbers.get(1), Some(7.0));
+    assert_eq!(old_numbers.get(2), Some(3.0));
+    assert!(!state.list(0).has_materialized_numeric_items());
+
+    assert!(state.list_mut(0).replace_number(2.0, 8.0));
+    assert_eq!(old_numbers.get(1), Some(7.0));
+    let new_snapshot = state.renderer_snapshot(2);
+    let new_numbers = new_snapshot.lists[0].numeric_items.as_ref().unwrap();
+    assert_eq!(new_numbers.get(0), Some(1.0));
+    assert_eq!(new_numbers.get(1), Some(8.0));
+    assert_eq!(new_numbers.get(2), Some(3.0));
+    assert!(!state.list(0).has_materialized_numeric_items());
+}
+
+#[test]
 fn only_changed_visible_state_requests_a_redraw() {
     let mut state = ScratchState::with_metadata(
         vec![1.0_f64.into(), 1.0_f64.into()],

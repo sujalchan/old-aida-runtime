@@ -88,6 +88,33 @@ impl WarpBudget {
         }
     }
 
+    /// Return how many logical loop iterations remain before the next clock read.
+    pub fn safe_points_until_check(&self) -> u16 {
+        self.safe_points_until_check + 1
+    }
+
+    /// Advance a generated, side-effect-free loop tail by `safe_points` iterations.
+    /// The watchdog check happens on exactly the same logical iteration as repeated
+    /// calls to `expired`.
+    pub fn expired_after_safe_points(&mut self, clock: &dyn Clock, safe_points: u16) -> bool {
+        assert!(
+            safe_points > 0,
+            "a fast-tail batch must advance at least once"
+        );
+        let until_check = self.safe_points_until_check();
+        assert!(
+            safe_points <= until_check,
+            "fast-tail batch crossed a watchdog check"
+        );
+        if safe_points < until_check {
+            self.safe_points_until_check -= safe_points;
+            false
+        } else {
+            self.safe_points_until_check = 0;
+            self.expired(clock)
+        }
+    }
+
     // force the watchdog at generated loop chunk boundaries, never per list item.
     pub fn expired_now(&mut self, clock: &dyn Clock) -> bool {
         self.safe_points_until_check = 0;

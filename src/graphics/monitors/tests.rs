@@ -200,6 +200,39 @@ fn list_monitor_uses_list_layout_and_keeps_its_items() {
 }
 
 #[test]
+fn compact_numeric_list_snapshots_render_only_requested_rows() {
+    let monitor = VariableMonitor::new("items", "", 0.0, 0.0)
+        .with_value_key("Stage::items#list-id@shared")
+        .with_list_values(Arc::new(Vec::new()), 180.0, 120.0);
+    let mut layer = VariableLayer::new(vec![monitor]).unwrap();
+    let source_numbers = (0..1000).map(|index| index as f64).collect::<Vec<_>>();
+    let numbers = Arc::new(crate::runtime::NumericListSnapshot::from_numbers(
+        &source_numbers,
+    ));
+
+    assert_eq!(
+        layer.set_monitor_list_snapshot(
+            "Stage::items#list-id@shared",
+            Arc::new(Vec::new()),
+            Some(Arc::clone(&numbers)),
+            numbers.len(),
+        ),
+        Some((0, true))
+    );
+    assert_eq!(layer.list_display_len(0), 1000);
+    assert_eq!(
+        layer.visible_list_rows(0).first(),
+        Some(&(1, "0".to_owned()))
+    );
+    assert_eq!(layer.visible_list_rows(0).len(), 3);
+
+    layer.scroll_list_at(10.0, -30.0, 12.0);
+    let rows = layer.visible_list_rows(0);
+    assert_eq!(rows.first().unwrap().0, 13);
+    assert_eq!(rows.first().unwrap().1, "12");
+}
+
+#[test]
 fn list_monitors_draw_above_scalar_monitors() {
     let list = VariableMonitor::new("items", "1", 0.0, 0.0).with_list_items(
         vec!["one".to_owned()],

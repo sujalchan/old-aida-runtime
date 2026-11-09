@@ -92,6 +92,7 @@ pub fn scratch_string(value: impl ScratchInput) -> String {
     to_text(value.scratch_view()).into_owned()
 }
 
+#[inline(always)]
 fn scratch_trig_round(value: f64) -> f64 {
     if value == 0.0 {
         return 0.0;
@@ -121,12 +122,26 @@ fn scratch_trig_round(value: f64) -> f64 {
 /// Scratch's sine reporter: degrees in, rounded to 10 decimal places.
 pub fn scratch_sin(value: impl ScratchInput) -> f64 {
     let degrees = scratch_to_number(value);
+    scratch_sin_number(degrees)
+}
+
+/// Scratch sine reporter for an already numeric generated expression.
+#[inline(always)]
+pub fn scratch_sin_number(degrees: f64) -> f64 {
+    let degrees = scratch_number_operand(degrees);
     scratch_trig_round(((std::f64::consts::PI * degrees) / 180.0).sin())
 }
 
 /// Scratch's cosine reporter: degrees in, rounded to 10 decimal places.
 pub fn scratch_cos(value: impl ScratchInput) -> f64 {
     let degrees = scratch_to_number(value);
+    scratch_cos_number(degrees)
+}
+
+/// Scratch cosine reporter for an already numeric generated expression.
+#[inline(always)]
+pub fn scratch_cos_number(degrees: f64) -> f64 {
+    let degrees = scratch_number_operand(degrees);
     scratch_trig_round(((std::f64::consts::PI * degrees) / 180.0).cos())
 }
 
@@ -173,7 +188,13 @@ pub fn fast_atan_degrees(value: impl ScratchInput) -> f64 {
 
 /// Scratch's inverse sine in degrees, using a stable atan2 form.
 pub fn scratch_asin_degrees(value: impl ScratchInput) -> f64 {
-    let number = scratch_to_number(value);
+    scratch_asin_degrees_number(scratch_to_number(value))
+}
+
+/// Scratch inverse sine in degrees for an already numeric generated expression.
+#[inline(always)]
+pub fn scratch_asin_degrees_number(value: f64) -> f64 {
+    let number = scratch_number_operand(value);
     let radians = scratch_asin_radians(number);
     radians * 180.0 / std::f64::consts::PI
 }
@@ -191,6 +212,7 @@ pub fn scratch_atan_degrees(value: impl ScratchInput) -> f64 {
     radians * 180.0 / std::f64::consts::PI
 }
 
+#[inline(always)]
 fn scratch_asin_radians(number: f64) -> f64 {
     number.atan2((1.0 - number * number).sqrt())
 }
@@ -530,6 +552,35 @@ mod tests {
         assert_eq!(scratch_tan(-270.0), f64::INFINITY);
         assert_eq!(scratch_tan(-90.0), f64::NEG_INFINITY);
         assert_eq!(scratch_tan(270.0), f64::NEG_INFINITY);
+    }
+
+    #[test]
+    fn numeric_trigonometry_helpers_match_dynamic_scratch_conversion() {
+        for value in [
+            f64::NEG_INFINITY,
+            -360.0,
+            -90.0,
+            -0.0,
+            0.0,
+            0.030_298_898_895_624_517,
+            30.0,
+            450_359.0,
+            f64::INFINITY,
+            f64::NAN,
+        ] {
+            assert_eq!(
+                scratch_sin_number(value).to_bits(),
+                scratch_sin(value).to_bits()
+            );
+            assert_eq!(
+                scratch_cos_number(value).to_bits(),
+                scratch_cos(value).to_bits()
+            );
+            assert_eq!(
+                scratch_asin_degrees_number(value).to_bits(),
+                scratch_asin_degrees(value).to_bits()
+            );
+        }
     }
 
     #[test]
