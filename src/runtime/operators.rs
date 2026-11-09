@@ -317,7 +317,6 @@ pub fn scratch_compare(left: impl ScratchInput, right: impl ScratchInput) -> Ord
 }
 
 fn scratch_compare_views(left: ScratchValueView<'_>, right: ScratchValueView<'_>) -> Ordering {
-
     if let (Some(left_number), Some(right_number)) =
         (comparison_number(left), comparison_number(right))
     {
