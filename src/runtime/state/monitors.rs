@@ -198,6 +198,13 @@ impl ScratchState {
         if let Some(metadata) = self.variables.get_mut(slot)
             && metadata.monitor_visible != visible
         {
+            let word = slot / 64;
+            let bit = 1_u64 << (slot % 64);
+            if visible {
+                self.visible_variable_monitor_words[word] |= bit;
+            } else {
+                self.visible_variable_monitor_words[word] &= !bit;
+            }
             metadata.monitor_visible = visible;
             self.request_presentation();
         }
@@ -221,6 +228,7 @@ impl ScratchState {
     }
 
     // publish only successful visible mutations, without cloning the list around each write.
+    #[inline(always)]
     pub fn list_changed_result(&mut self, slot: usize, changed: bool) {
         if !changed || !self.list_visibility.get(slot).copied().unwrap_or(false) {
             return;

@@ -13,6 +13,17 @@ fn add_to_scratch_value(value: &mut ScratchValue, change: f64) {
 }
 
 impl ScratchState {
+    /// Check generated regions' statically known variable slots with a compact
+    /// monitor bitmask instead of repeatedly scanning slot metadata.
+    #[inline(always)]
+    pub fn can_defer_variable_write_mask(&self, slots: &[u64]) -> bool {
+        self.event_sink.is_none()
+            && slots
+                .iter()
+                .zip(&self.visible_variable_monitor_words)
+                .all(|(region, visible)| region & visible == 0)
+    }
+
     /// Allow generated numeric locals to defer writes only when no renderer,
     /// visible monitor, or event sink can observe the values before the
     /// generated region commits them. Generated code commits before every
@@ -151,6 +162,14 @@ impl ScratchState {
             self.set_shared(slot, ScratchValue::Number(value));
             return;
         }
+        if self
+            .variables
+            .get(slot)
+            .is_some_and(|metadata| !metadata.monitor_visible)
+        {
+            self.values[slot] = ScratchValue::Number(value);
+            return;
+        }
         let Some(ScratchValue::Number(previous)) = self.values.get(slot) else {
             self.set_shared(slot, ScratchValue::Number(value));
             return;
@@ -178,6 +197,15 @@ impl ScratchState {
             self.set(slot, ScratchValue::Number(value));
             return;
         };
+        if !metadata.is_stage && !metadata.monitor_visible {
+            let values_len = self.values.len();
+            let instance = &mut self.instances[current_instance];
+            if instance.values.len() < values_len {
+                instance.values.resize(values_len, None);
+            }
+            instance.values[slot] = Some(ScratchValue::Number(value));
+            return;
+        }
         let instance = &self.instances[current_instance];
         let previous = instance
             .values
@@ -206,6 +234,23 @@ impl ScratchState {
     /// Update an existing numeric sprite slot in place in a synchronous batch.
     #[inline(always)]
     pub fn set_existing_local_number(&mut self, slot: usize, value: f64) {
+        if self.event_sink.is_none()
+            && self
+                .variables
+                .get(slot)
+                .is_some_and(|metadata| !metadata.is_stage && !metadata.monitor_visible)
+        {
+            if let Some(Some(previous)) = self
+                .instances
+                .get_mut(self.current_instance)
+                .and_then(|instance| instance.values.get_mut(slot))
+            {
+                *previous = ScratchValue::Number(value);
+                return;
+            }
+            self.set_local_number(slot, value);
+            return;
+        }
         if self.event_sink.is_none()
             && let Some(instance) = self.instances.get_mut(self.current_instance)
             && let Some(Some(ScratchValue::Number(previous))) = instance.values.get_mut(slot)
@@ -240,6 +285,14 @@ impl ScratchState {
     pub fn change_shared_number(&mut self, slot: usize, change: f64) {
         if self.event_sink.is_some() {
             self.change_shared(slot, change);
+            return;
+        }
+        if self
+            .variables
+            .get(slot)
+            .is_some_and(|metadata| !metadata.monitor_visible)
+        {
+            add_to_scratch_value(&mut self.values[slot], change);
             return;
         }
         let Some(ScratchValue::Number(previous)) = self.values.get(slot) else {
@@ -312,6 +365,27 @@ impl ScratchState {
             self.change_local_by(slot, change);
             return;
         };
+        if !metadata.is_stage && !metadata.monitor_visible {
+            let current_instance = self.current_instance;
+            let local_value_exists = self.instances[current_instance]
+                .values
+                .get(slot)
+                .is_some_and(Option::is_some);
+            let mut initial = (!local_value_exists).then(|| self.values[slot].clone());
+            let values_len = self.values.len();
+            let instance = &mut self.instances[current_instance];
+            if instance.values.len() < values_len {
+                instance.values.resize(values_len, None);
+            }
+            if let Some(value) = instance.values[slot].as_mut() {
+                add_to_scratch_value(value, change);
+            } else {
+                let mut value = initial.take().unwrap_or(ScratchValue::Undefined);
+                add_to_scratch_value(&mut value, change);
+                instance.values[slot] = Some(value);
+            }
+            return;
+        }
         let instance = &self.instances[current_instance];
         let previous = instance
             .values

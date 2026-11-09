@@ -52,6 +52,106 @@ fn numeric_replacement_and_equality_keep_scratch_index_and_number_rules() {
 }
 
 #[test]
+fn numeric_index_list_copy_keeps_dynamic_item_types_and_scratch_flooring() {
+    let mut list = ScratchList::new(vec![0.0.into(), 0.0.into()]);
+
+    assert!(list.replace_numeric(1.9, "7878672".into()));
+    assert_eq!(list.get(1.0), &ScratchValue::Text("7878672".into()));
+    assert!(!list.replace_numeric(1.1, "7878672".into()));
+    assert!(!list.replace_numeric(f64::NAN, "ignored".into()));
+    assert!(!list.replace_numeric(0.9, "ignored".into()));
+    assert!(!list.replace_numeric(3.0, "ignored".into()));
+    assert_eq!(list.length(), 2);
+}
+
+#[test]
+fn borrowed_numeric_copy_reuses_destination_text_storage() {
+    let mut list = ScratchList::new(vec![
+        ScratchValue::Text("source color".to_owned()),
+        ScratchValue::Text("destination color".to_owned()),
+    ]);
+    let destination_ptr = match &list.items()[1] {
+        ScratchValue::Text(text) => text.as_ptr(),
+        _ => unreachable!(),
+    };
+
+    assert!(list.copy_numeric_item(2.0, 1.0));
+    assert_eq!(list.get(2.0), &ScratchValue::Text("source color".into()));
+    let reused_destination_ptr = match &list.items()[1] {
+        ScratchValue::Text(text) => text.as_ptr(),
+        _ => unreachable!(),
+    };
+    assert_eq!(reused_destination_ptr, destination_ptr);
+
+    assert!(!list.copy_numeric_item(2.0, 1.0));
+    assert!(!list.copy_numeric_item(0.9, 1.0));
+    assert!(!list.copy_numeric_item(3.0, 1.0));
+
+    let mut nan = ScratchList::new(vec![ScratchValue::Number(f64::NAN)]);
+    assert!(nan.copy_numeric_item(1.0, 1.0));
+}
+
+#[test]
+fn unobserved_numeric_replacements_preserve_values_without_change_comparisons() {
+    let mut list = ScratchList::new(vec![
+        ScratchValue::Number(1.0),
+        ScratchValue::Text("old".to_owned()),
+    ]);
+
+    assert!(list.replace_number_unobserved(1.0, 1.0));
+    assert_eq!(list.get(1.0), &ScratchValue::Number(1.0));
+    assert!(list.replace_numeric_from_unobserved(2.0, &ScratchValue::Text("new".into())));
+    assert_eq!(list.get(2.0), &ScratchValue::Text("new".into()));
+    assert!(!list.replace_number_unobserved(3.0, 3.0));
+    assert!(!list.replace_numeric_from_unobserved(0.9, &ScratchValue::Undefined));
+}
+
+#[test]
+fn numeric_reads_and_replacements_use_compact_storage_with_dynamic_fallback() {
+    let mut list = ScratchList::new(vec![1.0.into(), 2.0.into()]);
+
+    assert!(list.replace_number(1.0, 3.0));
+    assert_eq!(list.get_number_numeric(1.0), Some(3.0));
+    assert!(!list.has_materialized_numeric_items());
+    assert_eq!(list.get_cached_number(1.0), 3.0);
+    assert!(!list.has_materialized_numeric_items());
+    assert_eq!(list.get_numeric(1.0), &ScratchValue::Number(3.0));
+    assert!(list.has_materialized_numeric_items());
+
+    assert!(list.replace_number(1.0, 4.0));
+    assert_eq!(list.get_number_numeric(1.0), Some(4.0));
+    assert!(!list.has_materialized_numeric_items());
+    assert_eq!(list.get_cached_number(1.0), 4.0);
+    assert!(!list.has_materialized_numeric_items());
+
+    assert!(list.replace_numeric_from_unobserved(2.0, &ScratchValue::Text("text".into())));
+    assert_eq!(list.get_number_numeric(2.0), None);
+    assert_eq!(list.get_numeric(2.0), &ScratchValue::Text("text".into()));
+}
+
+#[test]
+fn numeric_initial_lists_use_compact_storage_without_materializing_values() {
+    let list = ScratchList::new(vec![1.0.into(), f64::NAN.into(), 3.0.into()]);
+
+    assert!(list.numeric_items.is_some());
+    assert_eq!(list.get_number_for_arithmetic(2.0), 0.0);
+    assert!(!list.has_materialized_numeric_items());
+    assert!(matches!(list.get(2.0), ScratchValue::Number(value) if value.is_nan()));
+    assert!(list.has_materialized_numeric_items());
+}
+
+#[test]
+fn cached_numeric_reads_convert_dynamic_list_items_without_materializing_compact_storage() {
+    let mut list = ScratchList::new(vec![1.0.into(), 2.0.into()]);
+    assert!(list.replace_number_unobserved(2.0, 3.0));
+    assert_eq!(list.get_cached_number(2.0), 3.0);
+    assert!(!list.has_materialized_numeric_items());
+
+    assert!(list.replace_numeric_from_unobserved(2.0, &ScratchValue::Text("4.5".into())));
+    assert_eq!(list.get_cached_number(2.0), 4.5);
+}
+
+#[test]
 fn numeric_replacement_can_read_back_through_the_same_validated_index() {
     let mut list = ScratchList::new(vec![ScratchValue::Number(0.0), "old".into()]);
     assert_eq!(
@@ -433,6 +533,31 @@ fn invalid_and_special_indices_follow_scratch_rules() {
     list.replace("random", "ignored".into());
     list.delete("any");
     assert!(list.items().is_empty());
+}
+
+#[test]
+fn arithmetic_list_reads_skip_compact_view_materialization_and_coerce_mixed_items() {
+    let mut compact = ScratchList::new(
+        (0..24_000)
+            .map(|value| ScratchValue::Number(value as f64))
+            .collect(),
+    );
+    assert!(compact.replace_number(1.0, 9.0));
+    assert!(compact.numeric_items.is_some());
+    assert!(!compact.has_materialized_numeric_items());
+    assert_eq!(compact.get_number_for_arithmetic(1.0), 9.0);
+    assert_eq!(compact.get_number_for_arithmetic("last"), 23_999.0);
+    assert_eq!(compact.get_number_for_arithmetic(0.0), 0.0);
+    assert!(!compact.has_materialized_numeric_items());
+
+    let mixed = ScratchList::new(vec![
+        " 2.5 ".into(),
+        "not a number".into(),
+        ScratchValue::Number(f64::NAN),
+    ]);
+    assert_eq!(mixed.get_number_for_arithmetic(1.0), 2.5);
+    assert_eq!(mixed.get_number_for_arithmetic(2.0), 0.0);
+    assert_eq!(mixed.get_number_for_arithmetic(3.0), 0.0);
 }
 
 #[test]

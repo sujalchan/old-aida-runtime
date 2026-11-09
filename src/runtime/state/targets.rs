@@ -991,6 +991,7 @@ impl ScratchState {
         self.instances[instance].is_stage = is_stage;
     }
 
+    #[inline(always)]
     pub(super) fn ensure_instance_slot(&mut self, slot: usize) {
         let instance = &mut self.instances[self.current_instance];
         if instance.values.len() < self.values.len() {

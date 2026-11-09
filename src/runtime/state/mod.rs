@@ -52,6 +52,7 @@ pub struct ScratchState {
     target_costumes: Vec<Vec<ScratchCostumeMetadata>>,
     fence_geometry: Vec<Option<SpriteFenceGeometry>>,
     event_sink: Option<Sender<ObservableEvent>>,
+    visible_variable_monitor_words: Vec<u64>,
     input: RuntimeInputState,
     redraw_requested: bool,
     presentation_requested: bool,
@@ -65,6 +66,16 @@ pub struct ScratchState {
     loudness: f64,
     pending_pen_commands: Vec<PenCommand>,
     sound_runtime: SoundRuntime,
+}
+
+fn variable_monitor_words(variables: &[ScratchVariableMetadata]) -> Vec<u64> {
+    let mut words = vec![0; variables.len().div_ceil(64)];
+    for (slot, metadata) in variables.iter().enumerate() {
+        if metadata.monitor_visible {
+            words[slot / 64] |= 1_u64 << (slot % 64);
+        }
+    }
+    words
 }
 
 impl ScratchState {
@@ -134,6 +145,7 @@ impl ScratchState {
             target_costumes: Vec::new(),
             fence_geometry: Vec::new(),
             event_sink: None,
+            visible_variable_monitor_words: Vec::new(),
             input: RuntimeInputState::default(),
             redraw_requested: false,
             presentation_requested: false,
@@ -156,6 +168,7 @@ impl ScratchState {
         variables: Vec<ScratchVariableMetadata>,
     ) -> Self {
         assert_eq!(values.len(), variables.len());
+        let visible_variable_monitor_words = variable_monitor_words(&variables);
         Self {
             values,
             variables,
@@ -191,6 +204,7 @@ impl ScratchState {
             target_costumes: Vec::new(),
             fence_geometry: Vec::new(),
             event_sink: None,
+            visible_variable_monitor_words,
             input: RuntimeInputState::default(),
             redraw_requested: false,
             presentation_requested: false,
@@ -218,6 +232,7 @@ impl ScratchState {
         assert_eq!(values.len(), variables.len());
         assert_eq!(lists.len(), list_metadata.len());
         assert_eq!(lists.len(), list_visibility.len());
+        let visible_variable_monitor_words = variable_monitor_words(&variables);
         Self {
             values,
             variables,
@@ -253,6 +268,7 @@ impl ScratchState {
             target_costumes: Vec::new(),
             fence_geometry: Vec::new(),
             event_sink: None,
+            visible_variable_monitor_words,
             input: RuntimeInputState::default(),
             redraw_requested: false,
             presentation_requested: false,

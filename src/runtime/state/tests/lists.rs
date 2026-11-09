@@ -74,6 +74,78 @@ fn stage_numeric_batch_restores_authoritative_list_and_keeps_snapshots() {
 }
 
 #[test]
+fn numeric_list_copy_keeps_mixed_values_and_uses_current_sprite_lists() {
+    let mut state = ScratchState::with_project_data(
+        vec![],
+        vec![],
+        vec![
+            ScratchList::new(vec!["source color".into(), "second color".into()]),
+            ScratchList::new(vec!["destination color".into()]),
+        ],
+        vec![
+            ScratchListMetadata::for_target("source", "source", "Sprite", 1, false),
+            ScratchListMetadata::for_target("destination", "destination", "Sprite", 1, false),
+        ],
+        vec![false, false],
+    );
+    state.register_target(0, "Stage", true);
+    state.register_target(1, "Sprite", false);
+    let sprite = state.original_instance(1).unwrap();
+    state.set_current_instance(sprite);
+
+    // The first write materializes the sprite-local list through copy-on-write.
+    assert!(state.copy_list_item_numeric::<0, 1, false, false, true>(1.0, 1.0));
+    assert_eq!(
+        state.list(1).get(1.0),
+        &ScratchValue::Text("source color".into())
+    );
+    let destination_ptr = match state.list(1).get(1.0) {
+        ScratchValue::Text(text) => text.as_ptr(),
+        _ => unreachable!(),
+    };
+    assert!(state.copy_list_item_numeric::<0, 1, false, false, true>(2.0, 1.0));
+    assert_eq!(
+        state.list(1).get(1.0),
+        &ScratchValue::Text("second color".into())
+    );
+    let copied_ptr = match state.list(1).get(1.0) {
+        ScratchValue::Text(text) => text.as_ptr(),
+        _ => unreachable!(),
+    };
+    assert_eq!(copied_ptr, destination_ptr);
+
+    assert!(!state.copy_list_item_numeric::<0, 1, false, false, true>(2.0, 1.0));
+    assert!(state.copy_list_item_numeric::<0, 1, false, false, true>(0.9, 1.0));
+    assert_eq!(state.list(1).get(1.0), &ScratchValue::Text(String::new()));
+    assert!(!state.copy_list_item_numeric::<0, 1, false, false, true>(1.0, 0.9));
+}
+
+#[test]
+fn numeric_list_copy_keeps_compact_source_and_destination_storage() {
+    let mut state = ScratchState::with_project_data(
+        vec![],
+        vec![],
+        vec![
+            ScratchList::new(vec![1.0.into(), 2.0.into()]),
+            ScratchList::new(vec![0.0.into()]),
+        ],
+        vec![
+            ScratchListMetadata::for_target("source", "source", "Stage", 0, true),
+            ScratchListMetadata::for_target("destination", "destination", "Stage", 0, true),
+        ],
+        vec![false, false],
+    );
+    state.register_target(0, "Stage", true);
+    assert!(state.stage_list_mut(0).replace_number_unobserved(1.0, 3.0));
+    assert!(state.copy_list_item_numeric::<0, 1, true, true, false>(1.0, 1.0));
+
+    assert_eq!(state.stage_list(0).get_number_numeric(1.0), Some(3.0));
+    assert_eq!(state.stage_list(1).get_number_numeric(1.0), Some(3.0));
+    assert!(!state.stage_list(0).has_materialized_numeric_items());
+    assert!(!state.stage_list(1).has_materialized_numeric_items());
+}
+
+#[test]
 fn compact_stage_list_snapshots_and_monitor_edits_follow_batch_changes() {
     let mut state = ScratchState::with_project_data(
         vec![],

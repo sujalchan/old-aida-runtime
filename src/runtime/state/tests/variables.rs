@@ -58,6 +58,35 @@ fn deferred_variable_writes_require_unobserved_slots() {
 }
 
 #[test]
+fn generated_write_deferral_guard_tracks_visibility_and_events() {
+    let mut state = ScratchState::with_project_data(
+        vec![0.0.into(), 0.0.into()],
+        vec![
+            ScratchVariableMetadata::for_target("hidden", "hidden", "Stage", 0, true)
+                .with_monitor_visible(false),
+            ScratchVariableMetadata::for_target("visible", "visible", "Stage", 0, true)
+                .with_monitor_visible(true),
+        ],
+        vec![],
+        vec![],
+        vec![],
+    );
+    assert!(state.can_defer_variable_write_mask(&[0x1]));
+    assert!(!state.can_defer_variable_write_mask(&[0x2]));
+
+    state.set_variable_visible(1, false);
+    assert!(state.can_defer_variable_write_mask(&[0x2]));
+    state.set_variable_visible(0, true);
+    assert!(!state.can_defer_variable_write_mask(&[0x1]));
+    state.set_variable_visible(0, false);
+    assert!(state.can_defer_variable_write_mask(&[0x1]));
+
+    let (sender, _receiver) = std::sync::mpsc::channel();
+    state.set_event_sink(Some(sender));
+    assert!(!state.can_defer_variable_write_mask(&[0x1]));
+}
+
+#[test]
 fn existing_local_number_preserves_events_monitor_and_clone_scope() {
     let mut state = ScratchState::with_metadata(
         vec![ScratchValue::Text("initial".into())],
@@ -167,6 +196,42 @@ fn numeric_change_fast_paths_preserve_scope_and_monitor_updates() {
     assert_eq!(state.get(1), &ScratchValue::Number(9.0));
     state.set_current_instance(original);
     assert_eq!(state.get(1), &ScratchValue::Number(5.0));
+}
+
+#[test]
+fn unobserved_numeric_writes_keep_scratch_coercion_and_clone_scope() {
+    let mut state = ScratchState::with_metadata(
+        vec![
+            ScratchValue::Text("2.5".to_owned()),
+            ScratchValue::Text("3".to_owned()),
+        ],
+        vec![
+            ScratchVariableMetadata::for_target("stage", "shared", "Stage", 0, true)
+                .with_monitor_visible(false),
+            ScratchVariableMetadata::for_target("local", "score", "Sprite", 1, false)
+                .with_monitor_visible(false),
+        ],
+    );
+    state.register_target(0, "Stage", true);
+    state.register_target(1, "Sprite", false);
+    let original = state.original_instance(1).unwrap();
+    state.set_current_instance(original);
+
+    state.set_shared_number(0, 4.0);
+    state.change_shared_number(0, 1.0);
+    assert_eq!(state.get_shared(0), &ScratchValue::Number(5.0));
+
+    state.set_local_number(1, 8.0);
+    state.change_local_number(1, 2.0);
+    assert_eq!(state.get(1), &ScratchValue::Number(10.0));
+    let clone = state.create_clone(original, 1, 300).unwrap();
+    state.presentation_consumed();
+    state.set_current_instance(clone);
+    state.set_existing_local_number(1, 20.0);
+    assert_eq!(state.get(1), &ScratchValue::Number(20.0));
+    state.set_current_instance(original);
+    assert_eq!(state.get(1), &ScratchValue::Number(10.0));
+    assert!(!state.presentation_requested());
 }
 
 #[test]

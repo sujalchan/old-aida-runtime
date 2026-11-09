@@ -29,13 +29,17 @@ impl ScratchList {
         let all_numbers = items
             .iter()
             .all(|item| matches!(item, ScratchValue::Number(_)));
-        Self {
+        let mut list = Self {
             items: Arc::new(items),
             numeric_items: None,
             materialized_items: OnceLock::new(),
             cached_selectors: OnceLock::new(),
             all_numbers,
+        };
+        if all_numbers && list.length() > 0 {
+            list.activate_numeric_storage();
         }
+        list
     }
 
     /// Build a list from the compact JSON initializer emitted by aida-ast.
@@ -76,6 +80,25 @@ impl ScratchList {
                 Arc::new(numbers.iter().copied().map(ScratchValue::Number).collect())
             });
         }
+    }
+
+    fn activate_numeric_storage(&mut self) {
+        if self.numeric_items.is_some() {
+            return;
+        }
+        debug_assert!(self.all_numbers);
+        let numbers = self
+            .items
+            .iter()
+            .map(|item| match item {
+                ScratchValue::Number(number) => *number,
+                _ => unreachable!("all-numeric list invariant"),
+            })
+            .collect();
+        self.items = Arc::new(Vec::new());
+        self.materialized_items.take();
+        self.cached_selectors.take();
+        self.numeric_items = Some(Arc::new(numbers));
     }
 
     pub fn items(&self) -> &[ScratchValue] {
@@ -219,9 +242,123 @@ impl ScratchList {
         true
     }
 
+    /// Replace an item using an index already known to be numeric.
+    #[inline]
+    pub fn replace_numeric(&mut self, index: f64, item: ScratchValue) -> bool {
+        self.materialize_for_mutation();
+        let Some(index) = resolve_numeric_index(index, self.items.len()) else {
+            return false;
+        };
+        if self.items[index] == item {
+            return false;
+        }
+        self.all_numbers &= matches!(&item, ScratchValue::Number(_));
+        Arc::make_mut(&mut self.items)[index] = item;
+        true
+    }
+
+    /// Replace a numeric-indexed item from a borrowed value so text copies can
+    /// reuse the destination String allocation.
+    #[inline]
+    pub fn replace_numeric_from(&mut self, index: f64, item: &ScratchValue) -> bool {
+        self.materialize_for_mutation();
+        let Some(index) = resolve_numeric_index(index, self.items.len()) else {
+            return false;
+        };
+        if self.items[index] == *item {
+            return false;
+        }
+        self.all_numbers &= matches!(item, ScratchValue::Number(_));
+        Arc::make_mut(&mut self.items)[index].clone_from(item);
+        true
+    }
+
+    /// Replace an item when no observer can see whether its value changed.
+    #[inline]
+    pub fn replace_numeric_from_unobserved(&mut self, index: f64, item: &ScratchValue) -> bool {
+        self.materialize_for_mutation();
+        let Some(index) = resolve_numeric_index(index, self.items.len()) else {
+            return false;
+        };
+        self.all_numbers &= matches!(item, ScratchValue::Number(_));
+        Arc::make_mut(&mut self.items)[index].clone_from(item);
+        true
+    }
+
+    /// Copy between numeric-indexed entries in this list without cloning text.
+    #[inline]
+    pub fn copy_numeric_item(&mut self, destination: f64, source: f64) -> bool {
+        if let Some(value) = self.get_number_numeric(source) {
+            return self.replace_number(destination, value);
+        }
+        self.materialize_for_mutation();
+        let Some(destination) = resolve_numeric_index(destination, self.items.len()) else {
+            return false;
+        };
+        let Some(source) = resolve_numeric_index(source, self.items.len()) else {
+            return false;
+        };
+        let items = Arc::make_mut(&mut self.items);
+        if items[destination] == items[source] {
+            return false;
+        }
+        self.all_numbers &= matches!(items[source], ScratchValue::Number(_));
+        if destination < source {
+            let (before_source, from_source) = items.split_at_mut(source);
+            before_source[destination].clone_from(&from_source[0]);
+        } else if destination > source {
+            let (before_destination, after_destination) = items.split_at_mut(destination);
+            after_destination[0].clone_from(&before_destination[source]);
+        } else {
+            // Number(NaN) compares unequal to itself, so preserve replace's
+            // changed result while avoiding an aliased clone_from call.
+            return true;
+        }
+        true
+    }
+
+    /// Copy within an unobserved list without comparing the old destination.
+    #[inline]
+    pub fn copy_numeric_item_unobserved(&mut self, destination: f64, source: f64) -> bool {
+        if let Some(value) = self.get_number_numeric(source) {
+            return self.replace_number_unobserved(destination, value);
+        }
+        self.materialize_for_mutation();
+        let Some(destination) = resolve_numeric_index(destination, self.items.len()) else {
+            return false;
+        };
+        let Some(source) = resolve_numeric_index(source, self.items.len()) else {
+            return false;
+        };
+        let items = Arc::make_mut(&mut self.items);
+        self.all_numbers &= matches!(items[source], ScratchValue::Number(_));
+        if destination < source {
+            let (before_source, from_source) = items.split_at_mut(source);
+            before_source[destination].clone_from(&from_source[0]);
+        } else if destination > source {
+            let (before_destination, after_destination) = items.split_at_mut(destination);
+            after_destination[0].clone_from(&before_destination[source]);
+        }
+        true
+    }
+
     /// replace a numeric one-based item without building dynamic Scratch values.
     #[inline]
     pub fn replace_number(&mut self, index: f64, item: f64) -> bool {
+        if self.all_numbers {
+            self.activate_numeric_storage();
+            let Some(index) =
+                resolve_numeric_index(index, self.numeric_items.as_ref().unwrap().len())
+            else {
+                return false;
+            };
+            if self.numeric_items.as_ref().unwrap()[index] == item {
+                return false;
+            }
+            self.materialized_items.take();
+            Arc::make_mut(self.numeric_items.as_mut().unwrap())[index] = item;
+            return true;
+        }
         self.materialize_for_mutation();
         let Some(index) = resolve_numeric_index(index, self.items.len()) else {
             return false;
@@ -229,6 +366,28 @@ impl ScratchList {
         if matches!(&self.items[index], ScratchValue::Number(current) if *current == item) {
             return false;
         }
+        Arc::make_mut(&mut self.items)[index] = ScratchValue::Number(item);
+        true
+    }
+
+    /// Replace a numeric value when the list has no monitor or other observer.
+    #[inline]
+    pub fn replace_number_unobserved(&mut self, index: f64, item: f64) -> bool {
+        if self.all_numbers {
+            self.activate_numeric_storage();
+            let Some(index) =
+                resolve_numeric_index(index, self.numeric_items.as_ref().unwrap().len())
+            else {
+                return false;
+            };
+            self.materialized_items.take();
+            Arc::make_mut(self.numeric_items.as_mut().unwrap())[index] = item;
+            return true;
+        }
+        self.materialize_for_mutation();
+        let Some(index) = resolve_numeric_index(index, self.items.len()) else {
+            return false;
+        };
         Arc::make_mut(&mut self.items)[index] = ScratchValue::Number(item);
         true
     }
@@ -338,6 +497,35 @@ impl ScratchList {
             .unwrap_or(&EMPTY_ITEM)
     }
 
+    /// Read a numeric Scratch list item without materializing its dynamic view.
+    #[inline(always)]
+    pub fn get_number_numeric(&self, index: f64) -> Option<f64> {
+        let length = self.length();
+        let index = resolve_numeric_index(index, length)?;
+        if let Some(numbers) = &self.numeric_items {
+            return numbers.get(index).copied();
+        }
+        match self.items.get(index)? {
+            ScratchValue::Number(number) => Some(*number),
+            _ => None,
+        }
+    }
+
+    /// Read one list item as a Scratch arithmetic operand without building the
+    /// full borrowed `ScratchValue` view of compact numeric storage.
+    #[inline]
+    pub fn get_number_for_arithmetic(&self, index: impl ScratchInput) -> f64 {
+        let ListIndex::Item(index) = resolve_index(index, self.length(), false) else {
+            return 0.0;
+        };
+        if let Some(numbers) = &self.numeric_items {
+            return scratch_to_number(numbers[index]);
+        }
+        self.items
+            .get(index)
+            .map_or(0.0, scratch_to_number)
+    }
+
     /// Return the original item and a cached selector derived from it. The
     /// cache is dropped on every mutation and never changes list contents.
     #[inline]
@@ -360,6 +548,16 @@ impl ScratchList {
 
     #[inline]
     pub fn get_cached_number(&self, index: impl ScratchInput) -> f64 {
+        if let ScratchValueView::Number(number) = index.scratch_view() {
+            let Some(index) = resolve_numeric_index(number, self.length()) else {
+                return scratch_to_number(&EMPTY_ITEM);
+            };
+            return if let Some(numbers) = &self.numeric_items {
+                numbers[index]
+            } else {
+                scratch_to_number(&self.items[index])
+            };
+        }
         let (_, selector) = self.get_with_cached_selector(index);
         scratch_to_number(selector)
     }

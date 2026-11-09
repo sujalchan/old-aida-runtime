@@ -85,6 +85,7 @@ impl ScratchState {
         changed
     }
 
+    #[inline(always)]
     pub fn list(&self, slot: usize) -> &ScratchList {
         self.instances[self.current_instance]
             .lists
@@ -99,6 +100,7 @@ impl ScratchState {
         &self.lists[slot]
     }
 
+    #[inline(always)]
     pub fn list_mut(&mut self, slot: usize) -> &mut ScratchList {
         if self
             .list_metadata
@@ -111,6 +113,118 @@ impl ScratchState {
                 .unwrap();
         }
         &mut self.lists[slot]
+    }
+
+    /// Mutate a Stage list whose ownership was resolved by the generator.
+    #[inline(always)]
+    pub fn stage_list_mut(&mut self, slot: usize) -> &mut ScratchList {
+        debug_assert!(self.list_metadata[slot].is_stage);
+        &mut self.lists[slot]
+    }
+
+    /// Copy between lists using numeric Scratch indices without allocating a
+    /// temporary value. Text destinations can reuse their existing buffers.
+    #[inline(always)]
+    pub fn copy_list_item_numeric<
+        const SOURCE_SLOT: usize,
+        const DESTINATION_SLOT: usize,
+        const SOURCE_IS_STAGE: bool,
+        const DESTINATION_IS_STAGE: bool,
+        const TRACK_CHANGED: bool,
+    >(
+        &mut self,
+        source_index: f64,
+        destination_index: f64,
+    ) -> bool {
+        let source_slot = SOURCE_SLOT;
+        let destination_slot = DESTINATION_SLOT;
+        if SOURCE_SLOT == DESTINATION_SLOT {
+            return if TRACK_CHANGED {
+                self.list_mut(destination_slot)
+                    .copy_numeric_item(destination_index, source_index)
+            } else {
+                self.list_mut(destination_slot)
+                    .copy_numeric_item_unobserved(destination_index, source_index)
+            };
+        }
+        if !DESTINATION_IS_STAGE {
+            self.ensure_instance_slot(destination_slot);
+        }
+
+        macro_rules! replace_from {
+            ($destination:expr, $source:expr) => {{
+                if let Some(value) = $source.get_number_numeric(source_index) {
+                    if TRACK_CHANGED {
+                        $destination.replace_number(destination_index, value)
+                    } else {
+                        $destination.replace_number_unobserved(destination_index, value)
+                    }
+                } else if TRACK_CHANGED {
+                    $destination
+                        .replace_numeric_from(destination_index, $source.get_numeric(source_index))
+                } else {
+                    $destination.replace_numeric_from_unobserved(
+                        destination_index,
+                        $source.get_numeric(source_index),
+                    )
+                }
+            }};
+        }
+
+        let current_instance = self.current_instance;
+        match (SOURCE_IS_STAGE, DESTINATION_IS_STAGE) {
+            (true, true) => {
+                let (source, destination) = if source_slot < destination_slot {
+                    let (before, after) = self.lists.split_at_mut(destination_slot);
+                    (&before[source_slot], &mut after[0])
+                } else {
+                    let (before, after) = self.lists.split_at_mut(source_slot);
+                    (&after[0], &mut before[destination_slot])
+                };
+                replace_from!(destination, source)
+            }
+            (true, false) => {
+                let source = &self.lists[source_slot];
+                let destination = self.instances[current_instance].lists[destination_slot]
+                    .as_mut()
+                    .expect("current sprite list slot was materialized");
+                replace_from!(destination, source)
+            }
+            (false, true) => {
+                if let Some(source) = self.instances[current_instance].lists[source_slot].as_ref() {
+                    let destination = &mut self.lists[destination_slot];
+                    replace_from!(destination, source)
+                } else if source_slot < destination_slot {
+                    let (before, after) = self.lists.split_at_mut(destination_slot);
+                    replace_from!(&mut after[0], &before[source_slot])
+                } else {
+                    let (before, after) = self.lists.split_at_mut(source_slot);
+                    replace_from!(&mut before[destination_slot], &after[0])
+                }
+            }
+            (false, false) => {
+                let lists = &self.lists;
+                let instance = &mut self.instances[current_instance];
+                let (source, destination) = if source_slot < destination_slot {
+                    let (before, after) = instance.lists.split_at_mut(destination_slot);
+                    (
+                        before[source_slot].as_ref().unwrap_or(&lists[source_slot]),
+                        after[0]
+                            .as_mut()
+                            .expect("current sprite list slot was materialized"),
+                    )
+                } else {
+                    let (before, after) = instance.lists.split_at_mut(source_slot);
+                    (
+                        after[0].as_ref().unwrap_or(&lists[source_slot]),
+                        before[destination_slot]
+                            .as_mut()
+                            .expect("current sprite list slot was materialized"),
+                    )
+                };
+                replace_from!(destination, source)
+            }
+        }
     }
 
     /// Run a synchronous generated batch with a Stage list borrowed once.
